@@ -44,6 +44,7 @@ val LocalDragDropState = compositionLocalOf { DragDropState() }
 fun KanbanScreen(viewModel: KanbanViewModel = viewModel()) {
     val boardState by viewModel.boardState.collectAsState()
     val isLoading by viewModel.isLoading.collectAsState()
+    val isOfflineMode by viewModel.isOfflineMode.collectAsState()
     var showConfetti by remember { mutableStateOf(false) }
 
     val dragDropState = remember { DragDropState() }
@@ -56,6 +57,9 @@ fun KanbanScreen(viewModel: KanbanViewModel = viewModel()) {
                 boardState?.let { it ->
                     Column(modifier = Modifier.padding(8.dp)) {
                         Header(viewModel.auth.currentUser?.uid)
+                        if (isOfflineMode) {
+                            OfflineModeIndicator()
+                        }
                         AddTaskSection(onAddTask = { viewModel.addTask(it) })
                         Row(
                             modifier = Modifier.fillMaxWidth(),
@@ -128,6 +132,34 @@ fun Header(userId: String?) {
         Text("Organize your workflow", fontSize = 16.sp, color = Color.Gray)
         userId?.let {
              Text("User ID: $it", fontSize = 10.sp, color = Color.Gray, modifier = Modifier.padding(top = 4.dp))
+        }
+    }
+}
+
+@Composable
+fun OfflineModeIndicator() {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 8.dp, vertical = 4.dp),
+        colors = CardDefaults.cardColors(containerColor = Color(0xFFFFF3CD))
+    ) {
+        Row(
+            modifier = Modifier.padding(12.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = "📱 离线模式",
+                fontSize = 14.sp,
+                fontWeight = FontWeight.Medium,
+                color = Color(0xFF856404)
+            )
+            Spacer(modifier = Modifier.width(8.dp))
+            Text(
+                text = "数据仅保存在本地",
+                fontSize = 12.sp,
+                color = Color(0xFF856404)
+            )
         }
     }
 }

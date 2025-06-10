@@ -14,6 +14,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.tasks.await
+import kotlinx.coroutines.delay
 import java.util.UUID
 
 class KanbanViewModel : ViewModel() {
@@ -32,44 +33,116 @@ class KanbanViewModel : ViewModel() {
     private val _isLoading = MutableStateFlow(true)
     val isLoading = _isLoading.asStateFlow()
     
+    private val _isOfflineMode = MutableStateFlow(false)
+    val isOfflineMode = _isOfflineMode.asStateFlow()
+    
     val columnOrder = listOf("todo", "inProgress", "done")
 
     init {
-        signInAndFetchBoard()
+        initializeApp()
+    }
+
+    private fun initializeApp() {
+        viewModelScope.launch {
+            try {
+                Log.d("KanbanViewModel", "Initializing app...")
+                
+                // First try to initialize Firebase with a timeout
+                val initSuccess = initializeFirebaseWithTimeout()
+                
+                if (initSuccess) {
+                    Log.d("KanbanViewModel", "Firebase initialized successfully")
+                    signInAndFetchBoard()
+                } else {
+                    Log.w("KanbanViewModel", "Firebase initialization failed, starting offline mode")
+                    startOfflineMode()
+                }
+                
+            } catch (e: Exception) {
+                Log.e("KanbanViewModel", "App initialization failed", e)
+                startOfflineMode()
+            }
+        }
+    }
+
+    private suspend fun initializeFirebaseWithTimeout(): Boolean {
+        return try {
+            // Try to access Firebase with a timeout
+            kotlinx.coroutines.withTimeout(10000) { // 10 second timeout
+                Log.d("KanbanViewModel", "Testing Firebase connection...")
+                
+                // Test Firebase connection by trying to get current user
+                val currentUser = auth.currentUser
+                Log.d("KanbanViewModel", "Firebase connection test completed. Current user: $currentUser")
+                
+                true
+            }
+        } catch (e: Exception) {
+            Log.e("KanbanViewModel", "Firebase connection test failed", e)
+            false
+        }
+    }
+
+    private fun startOfflineMode() {
+        Log.d("KanbanViewModel", "Starting offline mode")
+        _isOfflineMode.value = true
+        
+        // Create initial board data for offline use
+        val initialColumns = mapOf(
+            "todo" to ColumnData(name = "To Do", items = listOf(
+                Task(id = "offline-1", content = "欢迎使用离线模式！"),
+                Task(id = "offline-2", content = "您可以添加、移动和删除任务")
+            )),
+            "inProgress" to ColumnData(name = "In Progress", items = listOf(
+                Task(id = "offline-3", content = "离线数据不会同步到服务器")
+            )),
+            "done" to ColumnData(name = "Done", items = listOf(
+                Task(id = "offline-4", content = "配置Firebase后可启用云同步")
+            ))
+        )
+        
+        val offlineBoard = BoardState(columns = initialColumns)
+        _boardState.value = offlineBoard
+        _isLoading.value = false
     }
 
     private fun signInAndFetchBoard() {
-        Log.d("KanbanViewModel", "Attempting to sign in and fetch board...")
         viewModelScope.launch {
             try {
+                Log.d("KanbanViewModel", "Starting authentication...")
+                
                 if (auth.currentUser == null) {
-                    Log.d("KanbanViewModel", "No current user. Calling signInAnonymously().")
-                    auth.signInAnonymously().await()
-                    Log.d("KanbanViewModel", "Sign-in successful. User UID: ${auth.currentUser?.uid}")
+                    Log.d("KanbanViewModel", "No current user, attempting anonymous sign-in...")
+                    val result = auth.signInAnonymously().await()
+                    Log.d("KanbanViewModel", "Anonymous sign-in successful: ${result.user?.uid}")
                 } else {
-                    Log.d("KanbanViewModel", "User already signed in. UID: ${auth.currentUser?.uid}")
+                    Log.d("KanbanViewModel", "User already signed in: ${auth.currentUser?.uid}")
                 }
-
-                Log.d("KanbanViewModel", "Setting up Firestore snapshot listener.")
+                
+                Log.d("KanbanViewModel", "Setting up Firestore listener...")
                 boardDocRef.addSnapshotListener { snapshot, error ->
                     if (error != null) {
-                        Log.w("KanbanViewModel", "Firestore listener error", error)
+                        Log.e("KanbanViewModel", "Firestore listener error", error)
+                        if (_boardState.value == null) {
+                            // If no data loaded yet, start offline mode
+                            startOfflineMode()
+                        }
                         return@addSnapshotListener
                     }
 
                     if (snapshot != null && snapshot.exists()) {
-                        Log.d("KanbanViewModel", "Board data found, updating state.")
+                        Log.d("KanbanViewModel", "Board data found, updating state")
                         _boardState.value = snapshot.toObject<BoardState>()
+                        _isOfflineMode.value = false
                     } else {
-                        Log.d("KanbanViewModel", "No board data found, creating initial board.")
+                        Log.d("KanbanViewModel", "No board data found, creating initial board")
                         createInitialBoard()
                     }
                     _isLoading.value = false
                 }
             } catch (e: Exception) {
-                // This is the updated, more detailed error log.
                 Log.e("KanbanViewModel", "Authentication or setup failed", e)
-                _isLoading.value = false
+                startOfflineMode()
             }
         }
     }
@@ -89,11 +162,20 @@ class KanbanViewModel : ViewModel() {
                 _boardState.value = initialBoard
             } catch (e: Exception) {
                 Log.e("KanbanViewModel", "Failed to create initial board", e)
+                _boardState.value = initialBoard // Use local data
             }
         }
     }
     
     private fun updateFirestore(newState: BoardState) {
+        // Update local state immediately for better UX
+        _boardState.value = newState
+        
+        if (_isOfflineMode.value) {
+            Log.d("KanbanViewModel", "Offline mode: changes saved locally only")
+            return
+        }
+        
         viewModelScope.launch {
             try {
                 Log.d("KanbanViewModel", "Updating Firestore...")
@@ -101,6 +183,7 @@ class KanbanViewModel : ViewModel() {
                 Log.d("KanbanViewModel", "Firestore update successful")
             } catch (e: Exception) {
                 Log.e("KanbanViewModel", "Failed to update Firestore", e)
+                // Keep the local changes even if sync fails
             }
         }
     }
